@@ -92,8 +92,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	// Headers to remove because tls-client auto-decompresses the body,
+	// and we don't want to copy hop-by-hop headers.
+	dropHeaders := map[string]bool{
+		"Content-Encoding":  true,
+		"Content-Length":    true,
+		"Connection":        true,
+		"Keep-Alive":        true,
+		"Transfer-Encoding": true,
+		"Te":                true,
+		"Trailer":           true,
+		"Upgrade":           true,
+	}
+
 	// Copy response headers back to the original response
 	for name, values := range resp.Header {
+		if dropHeaders[name] {
+			continue
+		}
 		for _, value := range values {
 			w.Header().Add(name, value)
 		}
