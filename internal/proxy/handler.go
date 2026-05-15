@@ -6,23 +6,36 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+
+	fhttp "github.com/bogdanfinn/fhttp"
+	tls_client "github.com/bogdanfinn/tls-client"
+	tls_profiles "github.com/bogdanfinn/tls-client/profiles"
 )
 
 // Handler handles the proxy requests
 type Handler struct {
 	defaultHeaders map[string]string
-	client         *http.Client
+	client         tls_client.HttpClient
 }
 
 // NewHandler creates a new proxy handler
 func NewHandler(defaultHeaders map[string]string) *Handler {
+	// Setup tls client to avoid Cloudflare/reCAPTCHA blocks
+	options := []tls_client.HttpClientOption{
+		tls_client.WithTimeoutSeconds(30),
+		tls_client.WithClientProfile(tls_profiles.Chrome_120),
+		tls_client.WithNotFollowRedirects(),
+	}
+
+	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
+	if err != nil {
+		slog.Error("Failed to create tls client, falling back to default", "error", err)
+		panic(err)
+	}
+
 	return &Handler{
 		defaultHeaders: defaultHeaders,
-		client: &http.Client{
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		client:         client,
 	}
 }
 
@@ -45,8 +58,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a new HTTP request with context for better cancellation handling
-	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURLStr, r.Body)
+	// Create a new HTTP request using fhttp
+	proxyReq, err := fhttp.NewRequestWithContext(r.Context(), r.Method, targetURLStr, r.Body)
 	if err != nil {
 		slog.Error("Error creating request", "error", err, "url", targetURLStr)
 		http.Error(w, fmt.Sprintf("Error creating request: %v", err), http.StatusInternalServerError)
@@ -70,7 +83,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Send the request
+	// Send the request using tls-client
 	resp, err := h.client.Do(proxyReq)
 	if err != nil {
 		slog.Error("Error forwarding request", "error", err, "url", targetURLStr)
